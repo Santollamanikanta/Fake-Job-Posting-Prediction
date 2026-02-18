@@ -1,5 +1,6 @@
 import os
-import pickle
+import json
+import re
 import numpy as np
 from flask import Flask, request, render_template
 
@@ -9,8 +10,9 @@ app = Flask(__name__)
 # LOAD ARTIFACTS
 # ===============================
 print("Loading artifacts...")
-with open("tokenizer.pkl", "rb") as f:
-    tokenizer = pickle.load(f)
+# Load pure Python tokenizer config
+with open("tokenizer_config.json", "r") as f:
+    tk_config = json.load(f)
 
 # Load NumPy weights
 weights = np.load("model_weights.npz")
@@ -31,8 +33,29 @@ def relu(x):
     return np.maximum(0, x)
 
 def predict_numpy(text):
-    # Preprocessing
-    seq = tokenizer.texts_to_sequences([text])[0]
+    # Preprocessing (Pure Python Tokenizer)
+    lower = tk_config.get("lower", True)
+    filters = tk_config.get("filters", '!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n')
+    split = tk_config.get("split", " ")
+    word_index = tk_config.get("word_index", {})
+    num_words = tk_config.get("num_words", 10000)
+    
+    if lower:
+        text = text.lower()
+    
+    # Apply filters
+    f_regex = re.escape(filters)
+    text = re.sub(f'[{f_regex}]', '', text)
+    
+    tokens = text.split(split)
+    seq = []
+    for token in tokens:
+        if not token: continue
+        idx = word_index.get(token)
+        if idx is not None:
+            if num_words is None or idx < num_words:
+                seq.append(idx)
+    
     # Manual padding (post)
     if len(seq) > MAX_SEQUENCE_LENGTH:
         seq = seq[:MAX_SEQUENCE_LENGTH]
@@ -54,13 +77,10 @@ def predict_numpy(text):
     
     # LSTM loop
     for x_t in x:
-        # z = x*W + h*U + b
         z = np.dot(x_t, kernel) + np.dot(h, rec_kernel) + bias
-        # Split gates: Keras order is i, f, c, o
-        # (Actually Keras LSTM uses i, f, c, o by default)
         i = sigmoid(z[:units])
         f = sigmoid(z[units:2*units])
-        g = np.tanh(z[2*units:3*units]) # Candidate
+        g = np.tanh(z[2*units:3*units])
         o = sigmoid(z[3*units:])
         
         c = f * c + i * g
