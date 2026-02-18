@@ -1,13 +1,12 @@
 import os
-
-# MUST be before tensorflow import
-os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-
 import pickle
+import numpy as np
 import tensorflow as tf
 from flask import Flask, request, render_template
-from tensorflow.keras.preprocessing.sequence import pad_sequences
+
+# MUST be before tensorflow import for some environments
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
 app = Flask(__name__)
 
@@ -20,9 +19,9 @@ with open("tokenizer.pkl", "rb") as f:
 print("Tokenizer loaded!")
 
 # ===============================
-# LOAD KERAS MODEL (NOT TFLITE)
+# LOAD MODEL
 # ===============================
-print("Loading Keras model...")
+print("Loading model...")
 model = tf.keras.models.load_model("fake_job_lstm_model.h5")
 print("Model loaded successfully!")
 
@@ -35,6 +34,7 @@ MAX_SEQUENCE_LENGTH = 200
 # PREPROCESSING
 # ===============================
 def preprocess_text(text):
+    from tensorflow.keras.preprocessing.sequence import pad_sequences
     seq = tokenizer.texts_to_sequences([text])
     padded = pad_sequences(
         seq,
@@ -55,7 +55,7 @@ def home():
 @app.route("/predict", methods=["POST"])
 def predict():
     combined_text = request.form.get("combined_text")
-    print(f"Prediction requested for: {combined_text[:50]}...")
+    print(f"Prediction requested for: {combined_text[:50]}..." if combined_text else "Empty input")
 
     if not combined_text or combined_text.strip() == "":
         return render_template(
