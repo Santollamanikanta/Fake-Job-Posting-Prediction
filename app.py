@@ -1,62 +1,82 @@
 import os
-import numpy as np
+
+# MUST be before tensorflow import
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+
 import pickle
 import tensorflow as tf
 from flask import Flask, request, render_template
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 
-# Disable OneDNN & Reduce TensorFlow Logging
-os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-
 app = Flask(__name__)
 
-# Load Tokenizer
+# ===============================
+# LOAD TOKENIZER
+# ===============================
 print("Loading tokenizer...")
 with open("tokenizer.pkl", "rb") as f:
     tokenizer = pickle.load(f)
 print("Tokenizer loaded!")
 
-# Load TFLite model
-print("Loading TFLite model...")
-interpreter = tf.lite.Interpreter(model_path="fake_job_lstm_model.tflite")
-interpreter.allocate_tensors()
-input_details = interpreter.get_input_details()
-output_details = interpreter.get_output_details()
-print("TFLite model loaded!")
+# ===============================
+# LOAD KERAS MODEL (NOT TFLITE)
+# ===============================
+print("Loading Keras model...")
+model = tf.keras.models.load_model("fake_job_lstm_model.h5")
+print("Model loaded successfully!")
 
+# ===============================
+# CONSTANTS
+# ===============================
 MAX_SEQUENCE_LENGTH = 200
 
+# ===============================
+# PREPROCESSING
+# ===============================
 def preprocess_text(text):
-    sequence = tokenizer.texts_to_sequences([text])
-    return pad_sequences(sequence, maxlen=MAX_SEQUENCE_LENGTH, dtype="float32")
+    seq = tokenizer.texts_to_sequences([text])
+    padded = pad_sequences(
+        seq,
+        maxlen=MAX_SEQUENCE_LENGTH,
+        padding="post",
+        truncating="post"
+    )
+    return padded
 
+# ===============================
+# ROUTES
+# ===============================
 @app.route("/", methods=["GET"])
 def home():
+    print("Home route accessed")
     return render_template("index.html")
 
 @app.route("/predict", methods=["POST"])
 def predict():
     combined_text = request.form.get("combined_text")
+    print(f"Prediction requested for: {combined_text[:50]}...")
 
-    if not combined_text:
-        return render_template("index.html", prediction="Please enter the job description.")
+    if not combined_text or combined_text.strip() == "":
+        return render_template(
+            "index.html",
+            prediction="❗ Please enter the job description."
+        )
 
-    # Preprocess the input
     input_data = preprocess_text(combined_text)
 
-    # Run inference using TFLite model
-    interpreter.set_tensor(input_details[0]["index"], input_data)
-    interpreter.invoke()
-    prediction = interpreter.get_tensor(output_details[0]["index"])[0][0]
+    prediction = model.predict(input_data, verbose=0)[0][0]
 
-    # Determine result
-    result = "Fraudulent" if prediction > 0.7 else "Legitimate"
+    result = "Fraudulent 🚨" if prediction > 0.7 else "Legitimate ✅"
+    print(f"Prediction result: {result}")
 
-    return render_template("index.html", prediction=f"The job post is {result}")
+    return render_template(
+        "index.html",
+        prediction=f"The job post is: {result}"
+    )
 
+# ===============================
+# MAIN
+# ===============================
 if __name__ == "__main__":
-    app.run(debug=True)
-
-
-
+    app.run(debug=True, host="0.0.0.0", port=5000)
