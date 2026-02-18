@@ -1,29 +1,20 @@
 import os
 import pickle
 import numpy as np
-import tensorflow as tf
 from flask import Flask, request, render_template
-
-# MUST be before tensorflow import for some environments
-os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
 app = Flask(__name__)
 
 # ===============================
-# LOAD TOKENIZER
+# LOAD ARTIFACTS
 # ===============================
-print("Loading tokenizer...")
+print("Loading artifacts...")
 with open("tokenizer.pkl", "rb") as f:
     tokenizer = pickle.load(f)
-print("Tokenizer loaded!")
 
-# ===============================
-# LOAD MODEL
-# ===============================
-print("Loading model...")
-model = tf.keras.models.load_model("fake_job_lstm_model.h5")
-print("Model loaded successfully!")
+# Load NumPy weights
+weights = np.load("model_weights.npz")
+print("Artifacts loaded successfully!")
 
 # ===============================
 # CONSTANTS
@@ -31,18 +22,61 @@ print("Model loaded successfully!")
 MAX_SEQUENCE_LENGTH = 200
 
 # ===============================
-# PREPROCESSING
+# NUMPY INFERENCE ENGINE
 # ===============================
-def preprocess_text(text):
-    from tensorflow.keras.preprocessing.sequence import pad_sequences
-    seq = tokenizer.texts_to_sequences([text])
-    padded = pad_sequences(
-        seq,
-        maxlen=MAX_SEQUENCE_LENGTH,
-        padding="post",
-        truncating="post"
-    )
-    return padded
+def sigmoid(x):
+    return 1 / (1 + np.exp(-x))
+
+def relu(x):
+    return np.maximum(0, x)
+
+def predict_numpy(text):
+    # Preprocessing
+    seq = tokenizer.texts_to_sequences([text])[0]
+    # Manual padding (post)
+    if len(seq) > MAX_SEQUENCE_LENGTH:
+        seq = seq[:MAX_SEQUENCE_LENGTH]
+    else:
+        seq = seq + [0] * (MAX_SEQUENCE_LENGTH - len(seq))
+    
+    # 1. Embedding Layer
+    emb_weights = weights['embedding_weights']
+    x = emb_weights[seq] # (200, 100)
+    
+    # 2. LSTM Layer
+    kernel = weights['lstm_kernel']
+    rec_kernel = weights['lstm_recurrent_kernel']
+    bias = weights['lstm_bias']
+    units = rec_kernel.shape[0]
+    
+    h = np.zeros(units)
+    c = np.zeros(units)
+    
+    # LSTM loop
+    for x_t in x:
+        # z = x*W + h*U + b
+        z = np.dot(x_t, kernel) + np.dot(h, rec_kernel) + bias
+        # Split gates: Keras order is i, f, c, o
+        # (Actually Keras LSTM uses i, f, c, o by default)
+        i = sigmoid(z[:units])
+        f = sigmoid(z[units:2*units])
+        g = np.tanh(z[2*units:3*units]) # Candidate
+        o = sigmoid(z[3*units:])
+        
+        c = f * c + i * g
+        h = o * np.tanh(c)
+        
+    # 3. Dense Layer 1 (ReLU)
+    w1 = weights['dense_1_kernel']
+    b1 = weights['dense_1_bias']
+    x = relu(np.dot(h, w1) + b1)
+    
+    # 4. Dense Layer 2 (Output Sigmoid)
+    w2 = weights['dense_2_kernel']
+    b2 = weights['dense_2_bias']
+    prediction = sigmoid(np.dot(x, w2) + b2)[0]
+    
+    return prediction
 
 # ===============================
 # ROUTES
@@ -63,12 +97,11 @@ def predict():
             prediction="❗ Please enter the job description."
         )
 
-    input_data = preprocess_text(combined_text)
-
-    prediction = model.predict(input_data, verbose=0)[0][0]
+    # Use NumPy for prediction
+    prediction = predict_numpy(combined_text)
 
     result = "Fraudulent 🚨" if prediction > 0.7 else "Legitimate ✅"
-    print(f"Prediction result: {result}")
+    print(f"Prediction result: {result} (Score: {prediction:.4f})")
 
     return render_template(
         "index.html",
